@@ -203,3 +203,137 @@ block还会把它所捕获的所有变量都拷贝一份。这些拷贝放在des
 
 
 
+#### 9. 用handler块降低代码分散程度
+
+异步方法在执行完任务之后，需要以某种手段通知相关代码。实现此功能有很多办法。常用的技巧是设计一个委托协议，令关注此事件的对象遵从改协议。对象成为delegate之后，就可以在相关事件发生时得到通知了。例如：
+
+```objective-c
+@class TTNetworkFetcher;
+
+@protocol TTNetworkFetcherDelegate <NSObject>
+- (void)networkFetcher:(TTNetworkFetcher *)networkFetcher
+     didFinishWithData:(NSData *)data;
+@end
+
+@interface TTNetworkFetcher : NSObject
+@property (nonatomic, weak) id <TTNetworkFetcherDelegate> delegate;
+- (id)initWithURL:(NSURL *)url;
+- (void)start;
+```
+
+我们也可以把completion handler定义为块类型，将其当做参数直接传给start方法：
+
+```objective-c
+typedef void(^TTNetworkFetcherCompletionHandler)(NSData *data);
+
+@interface TTNetworkFetcher : NSObject
+- (id)initWithURL:(NSURL *)url;
+- (void)startWithCompletionHandler:(TTNetworkFetcherCompletionHandler)handle;
+
+//.m
+//3.用handler块降低代码分散程度
+    NSURL *url = [[NSURL alloc] initWithString:@"XXX"];
+    TTNetworkFetcher *fetcher = [[TTNetworkFetcher alloc] initWithURL:url];    
+    [fetcher startWithCompletionHandler:^(NSData *data) {
+        
+    }];
+```
+
+与使用委托模式的代码相比，用块写出了的代码显然更加整洁。异步任务执行完毕后所需运行的业务逻辑，和启动异步任务所用的代码放在了一起。而且，由于块声明在创建获取器的范围呢，所以他可以访问此范围内的全部变量。
+
+委托模式有个缺点，如果类要分别使用多个获取器下载不同数据，那么就得在delegate回调方法里根据传入的获取器参数来切换。代码写法如下：
+
+```objective-c
+- (void)initXXX {
+    NSURL *url1 = [[NSURL alloc] initWithString:@"XXX"];
+    _fetcher1 = [[TTNetworkFetcher alloc] initWithURL:url1];
+    _fetcher1.delegate = self;
+    [_fetcher1 start];
+    
+    NSURL *url2 = [[NSURL alloc] initWithString:@"XXX"];
+    _fetcher2 = [[TTNetworkFetcher alloc] initWithURL:url2];
+    _fetcher2.delegate = self;
+    [_fetcher2 start];
+}
+
+- (void)networkFetcher:(TTNetworkFetcher *)networkFetcher didFinishWithData:(NSData *)data{
+    if (networkFetcher == _fetcher1) {
+        //XXX = data;
+        _fetcher1 = nil;
+    }
+    else if (networkFetcher == _fetcher2){
+        //data handler
+        _fetcher2 = nil;
+    }
+    //etc.
+}
+```
+
+这么写代码，不仅会令delegate回调方法变的很长，而且还要把网络数据获取器对象保存为实例变量，以便在判断语句中使用。这么做可能有其他原因，比如稍后要根据情况解除监听等，然而这种写法有副作用，通常很快就会使类的代码激增。改用块来写的好处是：无须保存获取器，也无须在回调方法里切换，每个completion handler的业务逻辑，都是和相关的获取器对象一起来定义的。另外我们可以把处理成功情况和失败情况放在一个方法中。同时也需要注意循环引用的问题。
+
+
+
+#### 10. 多用派发队列，少用同步锁
+
+滥用@synchronized(self)会很危险，因为所有同步块都会彼此抢夺同一个锁。要是有很多歌属性都这么写的话，那么每个属性的同步块都要等其他所有同步块执行完毕才能执行。而且这样做也不是绝对安全的，如果多线程同时操作属性，那么取值时可能已经是其他线程写入的新的属性值了。
+
+可以使用“串行同步队列”代替同步块或锁对象。将读取操作及写入操作都安排在同一个队列里，即可保证数据同步。用法如下：
+
+```objective-c
+@synthesize someString = _someString;
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+	//4.多用派发队列，少用同步锁
+    _syncQueue = dispatch_queue_create("com.turkeyteo.syncQueue", NULL);
+    
+}
+
+- (NSString *)someString{
+    __block NSString *localSomeString;
+    dispatch_sync(_syncQueue, ^{
+        localSomeString = _someString;
+    });
+    return localSomeString;
+}
+
+- (void)setSomeString:(NSString *)someString{
+    //设置方法并不一定非得同步，这里可使用异步能提高执行速度。注意：如果只是执行很简单的操作，改用异步不见得会比同步快，因为执行异步派发时，需要拷贝块，拷贝也是需要花费时间的。
+    dispatch_async(_syncQueue, ^{
+        _someString = someString;
+    });
+}
+```
+
+我们也可以在并行队列中使用栅栏（barrier）来实现同步。串行队列本来就是按顺序执行的，所以使用它没有意义。使用如下：
+
+```objective-c
+_syncQ = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+
+- (NSString *)someString2{
+    __block NSString *localSomeString;
+    dispatch_sync(_syncQ, ^{
+        localSomeString = _someString2;
+    });
+    return localSomeString;
+}
+
+- (void)setSomeString2:(NSString *)someString2{
+    dispatch_barrier_async(_syncQ, ^{
+        _someString2 = someString2;
+    });
+}
+```
+
+使用栅栏性能会比使用串行队列要快。因为其虽然写入操作必须单独执行，但是读取操作可以并行，相比执行就更加高效了。
+
+
+
+#### 11. 系统架构
+
+将一系列代码封装为动态库（dynamic library），并在其中放入描述其接口的头文件，这样做出来的东西就叫框架。在开发“图形界面的应用程序”（graphical application）时，会用到名为Cocoa的框架，在iOS上称为Cocoa Touch。其实Cocoa本身并不是框架，但是里面集成了一批创建应用程序时经常会用到的框架。
+
+iOS的基石是Foundation框架，他提供了collection等核心功能和字符串处理等复杂功能。还有个与Foundation相伴的框架，叫做CoreFoundation。Foundation框架中的许多功能，都可以在此框架中找到对应的C语言API。其中有个功能叫做“无缝桥接”（toll-free bridging），可以把CoreFoundation中的C语言数据结构平滑转换为Foundation中的OC对象，也可以反向转换。比如NSString可以转到CoreFoundation中与之等效的CFString对象。
+
+CFNetwork：提供了C语言级别的网络通信能力，它将“BSD套接字”抽象成易于使用的网络接口。而Foundation则将其部分内容封装成OC接口以便于网络通信。例如可以用NSURLConnection从URL中下载数据。
+
