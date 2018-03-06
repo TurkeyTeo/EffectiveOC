@@ -1,6 +1,6 @@
 ####1. 理解objc_msgSend
 
-objc_msgSend函数会依据接受者与选择子的类型来调用适当的方法。为了完成次操作，改方法需要在接受者所属的类中搜寻起“方法列表”（list of methods），如果能找到与选择子名称相符的方法，就调到其实现代码。若是找不到，那就沿着继承体系继续向上查找，等找到合适的方法之后再跳转。如果最终还是找不到相符的方法，那就执行“消息转发”（message forwarding）操作。
+`objc_msgSend`函数会依据接受者与选择子的类型来调用适当的方法。为了完成次操作，改方法需要在接受者所属的类中搜寻起“方法列表”（list of methods），如果能找到与选择子名称相符的方法，就调到其实现代码。若是找不到，那就沿着继承体系继续向上查找，等找到合适的方法之后再跳转。如果最终还是找不到相符的方法，那就执行“消息转发”（message forwarding）操作。
 
 
 
@@ -14,7 +14,7 @@ objc_msgSend函数会依据接受者与选择子的类型来调用适当的方�
 
 如果在控制台中看到下面这种提示信息，那就说明你曾向某个对象发送过一条其无法解读的消息，从而启动了消息转发机制，并将此消息转发给了NSObject的默认实现。
 
-unrecognized selector sent to instance 0x87
+`unrecognized selector sent to instance 0x87`
 
 上面这段异常信息是由NSObject的“doesNotRecognizeSelector：”方法所抛出的。
 
@@ -54,7 +54,7 @@ unrecognized selector sent to instance 0x87
 
 这个方法可以实现的很简单：只需改变调用目标，使消息在新目标上得以调用即可。然而这样实现出来的方法与“备援接收者”方案所实现的方法等效，所以很少有人采用这么简单的实现方式。比较有用的实现方式为：在触发消息前，先以某种方式改变消息内容，比如追加另外一个参数，或者改变选择子等。
 
-![forwarding_flow](/Users/thinkive/Desktop/Study/MD/Effective Objective-C 2.0  学习笔记/forwarding_flow.png)
+![forwarding_flow.png](http://upload-images.jianshu.io/upload_images/3261360-ba2db901250a342a.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
 
 
 
@@ -142,7 +142,9 @@ for (NSDictionary *record in databseRecords) {
 
 **block的内部结构**
 
-每个OC对象都占据着某个内存区域，因为实例变量的个数及对象所包含的关联数据互不相同，所以每个对象所占的内存区域也有大有小。block本身也是对象，在存放块对象的内存区域中，首个变量是指向Class对象的指针，该指针叫做isa。其余内存中含有块对象正常运转所需的各种信息。![block](/Users/thinkive/Desktop/Study/MD/Effective Objective-C 2.0  学习笔记/block.png)
+每个OC对象都占据着某个内存区域，因为实例变量的个数及对象所包含的关联数据互不相同，所以每个对象所占的内存区域也有大有小。block本身也是对象，在存放块对象的内存区域中，首个变量是指向Class对象的指针，该指针叫做isa。其余内存中含有块对象正常运转所需的各种信息。
+![block.png](http://upload-images.jianshu.io/upload_images/3261360-ca23ac5b547a3505.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
 
 在内存布局中，最重要的就是invoke变量，这是个函数指针，指向块的实现代码。函数原型至少要接收一个void*型的参数，此参数代表block（block其实就是一种代替函数指针的语法结构），原来使用函数指针时，需要用“不透明的void指针”来传递状态。而改用block之后，则可以把原来用标准C语言特性所编写的代码封装成简明易用的接口。
 
@@ -337,3 +339,22 @@ iOS的基石是Foundation框架，他提供了collection等核心功能和字符
 
 CFNetwork：提供了C语言级别的网络通信能力，它将“BSD套接字”抽象成易于使用的网络接口。而Foundation则将其部分内容封装成OC接口以便于网络通信。例如可以用NSURLConnection从URL中下载数据。
 
+
+
+#### 12. 构建缓存时选用NSCache而非NSDictionary
+
+NSCache胜过NSDictionary之处自傲与，当系统资源将要耗尽时，他可以自动删减缓存。如果采用普通的字段，那么叫自己编写挂钩，在系统低内存通知时手工删减缓存。此外，NSCache还会先行删减“最久未使用的”对象。
+
+NSCache并不会“拷贝”键，而是“保留”它，NSCache对象不拷贝键的原因在于：很多时候，键都是有不支持拷贝操作的对象来充当的。因此，NSCache不会自动拷贝键，所以说，在键不支持拷贝操作的情况下，该类使用起来比字典更方便。另NSCache是线程安全的。缓存的时候线程安全很重要，你可能在某个线程中读取数据，此时如果发现缓存里没有指定的键，那么就要去下载该键对应的数据，而下载完数据之后所要执行的回调函数，有可能会在后台线程中运行，这样就是另外一个线程在写入缓存了。
+
+
+
+#### 13. 精简initialize与load的实现代码
+
+有时候，类必须先执行某些初始化操作。load方法，对于加入运行期系统中的每个类（class）和分类（category）来说，必定会调用此方法，而且只会调用一次。
+
+load方法的问题在于，执行该方法时，运行期系统处于“脆弱状态”（fragile state）。在执行子类的load方法之前，必定会先执行所有超类的load方法。而如果代码还依赖了其他程序库，那么程序库里相关类的load方法也必定会先执行。然而，根据某个给定的程序库，却无法判断出其中各个类的载入书序。因此，在load方法中使用其他类是不安全的。
+
+而且load方法务必实现的精简一些，也就是要尽量减少其所执行的操作，因为整个应用程序在执行load方法时都会阻塞。
+
+想要执行与类相关的初始化操作，可以覆写`+(void)initialize` ，对于每个类来说，该方法会在程序首次用该类之前调用，且只调用一次。它是由运行期系统来调用的，绝不应该通过代码直接调用。它与load方法相似，但是有几个区别。首先，它是“惰性调用的”，也就是说，只有当传给你下用到相关的类时才调用。如果某个类一直没有使用，那么其initialize方法就一直不会运行。也就是等于说，应用程序无需先把每个类的initialize都执行一遍，这与load方法不同，对于load必须阻塞兵等所有类的load都执行完成，应用程序才继续。另一点，运行期系统在执行该方法时，是处于正常状态的，因此，此时可以安全使用并调用任意类中的任意方法。而且是线程安全的，也就是说，再有执行initialize的那个线程可以操作类或者类实例，其他线程都要先阻塞，等着initialize执行完。最后一个区别是：initialize方法与其他消息一样，如果某个类未实现它，而其超类实现了，那么就会运行超类的实现代码。
